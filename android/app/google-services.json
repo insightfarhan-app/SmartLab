@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "135446987002",
+    "firebase_url": "https://smartlabesp32-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "smartlabesp32",
+    "storage_bucket": "smartlabesp32.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:135446987002:android:cfc16a2e9886f55a658943",
+        "android_client_info": {
+          "package_name": "com.smartlab.appxplora"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyANLGB0zekmjlkwblUD_6eh09gebh1oLq4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
