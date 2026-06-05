@@ -1,6 +1,6 @@
 {
-    "name": "smartlab",
-    "short_name": "smartlab",
+    "name": "smartLAB",
+    "short_name": "smartLAB",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#ffffff",

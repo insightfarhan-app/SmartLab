@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:smartlab/Auth/access_code_screen.dart';
-import 'package:smartlab/Home/HomePage.dart';
+import 'package:smartlab/Home/connection_page.dart';
+import 'access_code_screen.dart';
 
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
@@ -10,18 +10,25 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> {
-  bool _isAuthenticated = false;
-
-  void _onAccessGranted() {
-    setState(() {
-      _isAuthenticated = true;
-    });
-  }
+  // This variable tracks if the user has entered the correct PIN
+  bool isAuthenticated = false;
 
   @override
   Widget build(BuildContext context) {
-    return _isAuthenticated
-        ? const SmartLabApp()
-        : AccessCodeScreen(onSuccess: _onAccessGranted);
+    // 1. If not authenticated, show the PIN screen
+    if (!isAuthenticated) {
+      return AccessCodeScreen(
+        onSuccess: () {
+          // When the code is correct, update the state to true
+          setState(() {
+            isAuthenticated = true;
+          });
+        },
+      );
+    }
+
+    // 2. If the PIN was correct, navigate them to the Connection Screen
+    // (Which handles the working hours check and ESP32 verification)
+    return const ConnectionScreen();
   }
 }

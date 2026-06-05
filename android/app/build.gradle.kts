@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "com.smartlab.appxplora"
+    namespace = "com.smartLAB.appxplora"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 

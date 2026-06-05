@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_database/firebase_database.dart';
 
 class AccessCodeScreen extends StatefulWidget {
   final VoidCallback onSuccess;
@@ -15,16 +16,33 @@ class _AccessCodeScreenState extends State<AccessCodeScreen> {
   late List<FocusNode> _focusNodes;
 
   bool _isError = false;
-  static const String _correctCode = "2026";
+  String _correctCode = "2026";
+  int _failedAttempts = 0;
 
   @override
   void initState() {
     super.initState();
+    _fetchAccessCode();
     _controllers = List.generate(4, (_) => TextEditingController());
     _focusNodes = List.generate(4, (_) => FocusNode());
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNodes[0].requestFocus();
+    });
+  }
+
+  void _fetchAccessCode() async {
+    final ref = FirebaseDatabase.instance.ref().child('settings/access_code');
+    final snapshot = await ref.get();
+    if (snapshot.exists) {
+      if (mounted) setState(() => _correctCode = snapshot.value.toString());
+    }
+
+    // Listen for changes
+    ref.onValue.listen((event) {
+      if (mounted && event.snapshot.exists) {
+        setState(() => _correctCode = event.snapshot.value.toString());
+      }
     });
   }
 
@@ -76,7 +94,10 @@ class _AccessCodeScreenState extends State<AccessCodeScreen> {
       setState(() => _isError = false);
       widget.onSuccess();
     } else {
-      setState(() => _isError = true);
+      setState(() {
+        _isError = true;
+        _failedAttempts++;
+      });
 
       for (var controller in _controllers) {
         controller.clear();
@@ -250,14 +271,92 @@ class _AccessCodeScreenState extends State<AccessCodeScreen> {
                     );
                   }),
                 ),
-                const SizedBox(height: 40),
+                const SizedBox(height: 32),
                 _buildErrorMessage(),
+                if (_failedAttempts >= 3) ...[
+                  const SizedBox(height: 16),
+                  TextButton(
+                    onPressed: _showAdminCodeDialog,
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF6C5CE7),
+                    ),
+                    child: const Text(
+                      "Forgot Code? Use Admin Bypass",
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 40),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  void _showAdminCodeDialog() {
+    final TextEditingController adminCodeController = TextEditingController();
+    bool _isDialogError = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              title: const Text("Admin Override"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text("Enter the master admin code to bypass security."),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: adminCodeController,
+                    keyboardType: TextInputType.number,
+                    maxLength: 4,
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      labelText: "Admin Code",
+                      errorText: _isDialogError ? "Incorrect Admin Code" : null,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text("Cancel"),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6C5CE7),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: () {
+                    if (adminCodeController.text == "1245") {
+                      Navigator.pop(ctx);
+                      widget.onSuccess();
+                    } else {
+                      setDialogState(() => _isDialogError = true);
+                    }
+                  },
+                  child: const Text("Verify"),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

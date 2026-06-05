@@ -1,4 +1,4 @@
-package com.smartlab.appxplora
+package com.smartLAB.appxplora
 
 import io.flutter.embedding.android.FlutterActivity
 

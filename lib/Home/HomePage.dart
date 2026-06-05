@@ -1,666 +1,629 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:smartlab/Home/sensorpage.dart'; // Ensure this matches your directory structure
+import 'package:smartlab/Home/profile_screen.dart';
+import 'package:smartlab/Home/timing_screen.dart';
+import 'package:smartlab/Home/users_usage_screen.dart';
+import 'package:smartlab/Home/hanging_light_card.dart';
+import 'package:smartlab/Home/animated_plug_card.dart';
 
-class SmartLabApp extends StatefulWidget {
-  const SmartLabApp({super.key});
+class HomePage extends StatefulWidget {
+  const HomePage({super.key, this.isRestricted = false});
+
+  final bool isRestricted;
 
   @override
-  State<SmartLabApp> createState() => _SmartLabAppState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _SmartLabAppState extends State<SmartLabApp>
-    with TickerProviderStateMixin {
-  bool isConnected = false;
-  bool isConnecting = false;
-  String statusMessage = "Tap to Connect";
+class _HomePageState extends State<HomePage> {
+  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
 
   String tempValue = "--";
   String humidityValue = "--";
-  String motionStatus = "No Motion";
-  bool isLightOn = false;
+  bool isRelay1On = false; // Lights
+  bool isRelay2On = false; // AC Unit
+  bool isRelay3On = false; // Extra/Equipment
+  bool isRelay4On = false; // 4th Channel
 
-  late AnimationController _pulseController;
-  late Animation<double> _pulseAnimation;
+  String _role = "Student";
+  String _userName = "Unknown";
+  bool _isTimingRestricted = false;
+  String _restrictionMessage =
+      "Please visit during working hours to access the lab.";
+  int _currentIndex = 0;
 
-  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
+  Timer? _timeCheckTimer;
+  bool _isLabOpen = true;
+  int _startH = 9, _startM = 0;
+  int _endH = 15, _endM = 0;
 
   @override
   void initState() {
     super.initState();
-
-    _dbRef.child('sensor').keepSynced(true);
-    _dbRef.child('control/bulb').keepSynced(true);
-
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    );
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.2).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
-    );
+    _fetchRoleAndTiming();
+    _initializeListeners();
+    _timeCheckTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      _checkTime();
+    });
   }
 
   @override
   void dispose() {
-    _pulseController.dispose();
+    _timeCheckTimer?.cancel();
     super.dispose();
-  }
-
-  Future<void> _handleConnect() async {
-    setState(() {
-      isConnecting = true;
-      statusMessage = "Verifying ESP32 Status...";
-    });
-
-    _pulseController.repeat(reverse: true);
-
-    try {
-      final snapshot = await _dbRef.child('status/heartbeat').get();
-
-      await Future.delayed(const Duration(milliseconds: 1500));
-
-      if (snapshot.exists && snapshot.value != null) {
-        int lastSeenTime = snapshot.value as int;
-        int currentTime = DateTime.now().millisecondsSinceEpoch;
-
-        int diffSeconds = (currentTime - lastSeenTime) ~/ 1000;
-        print("ESP Last Seen: $diffSeconds seconds ago");
-
-        if (diffSeconds < 15) {
-          final bulbSnapshot = await _dbRef.child('control/bulb').get();
-          if (bulbSnapshot.exists && mounted) {
-            setState(() {
-              isLightOn = (bulbSnapshot.value.toString() == '1');
-            });
-          }
-
-          _initializeListeners();
-
-          if (mounted) {
-            setState(() {
-              isConnecting = false;
-              isConnected = true;
-              statusMessage = "Connected";
-            });
-            _pulseController.stop();
-          }
-        } else {
-          _showConnectionErrorDialog();
-        }
-      } else {
-        _showConnectionErrorDialog();
-      }
-    } catch (e) {
-      _showConnectionErrorDialog();
-    }
-  }
-
-  void _showConnectionErrorDialog() {
-    if (mounted) {
-      _pulseController.stop();
-      _pulseController.reset();
-
-      setState(() {
-        isConnecting = false;
-        statusMessage = "Tap to Connect";
-      });
-
-      showDialog(
-        context: context,
-        builder: (BuildContext context) {
-          return AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-            ),
-            title: Row(
-              children: const [
-                Icon(Icons.warning_amber_rounded, color: Colors.orange),
-                SizedBox(width: 10),
-                Text("Connection Failed"),
-              ],
-            ),
-            content: const Text(
-              "Please check that the ESP is connected and then try again.",
-              style: TextStyle(fontSize: 16),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-                child: const Text(
-                  "OK",
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          );
-        },
-      );
-    }
   }
 
   void _initializeListeners() {
     _dbRef.child('sensor/temperature').onValue.listen((event) {
-      final val = event.snapshot.value;
-      if (mounted) {
-        setState(() => tempValue = val != null ? "${val.toString()}°C" : "--");
+      if (mounted && event.snapshot.value != null) {
+        double t = double.tryParse(event.snapshot.value.toString()) ?? 0;
+        setState(() => tempValue = "${t.round()}");
       }
     });
 
     _dbRef.child('sensor/humidity').onValue.listen((event) {
-      final val = event.snapshot.value;
-      if (mounted) {
-        setState(
-          () => humidityValue = val != null ? "${val.toString()}%" : "--",
-        );
+      if (mounted && event.snapshot.value != null) {
+        setState(() => humidityValue = event.snapshot.value.toString());
       }
     });
 
-    _dbRef.child('sensor/motion').onValue.listen((event) {
-      final val = event.snapshot.value;
-      bool detected = (val.toString() == '1');
+    _dbRef.child('control/relay1').onValue.listen((event) {
       if (mounted) {
-        setState(
-          () => motionStatus = detected ? "Motion Detected" : "No Motion",
-        );
+        bool isOn = (event.snapshot.value.toString() == '1');
+        setState(() => isRelay1On = isOn);
+        if (isOn && (_isTimingRestricted || widget.isRestricted))
+          _toggleRelay('relay1', false);
       }
     });
 
-    _dbRef.child('control/bulb').onValue.listen((event) {
-      final val = event.snapshot.value;
+    _dbRef.child('control/relay2').onValue.listen((event) {
       if (mounted) {
-        setState(() {
-          isLightOn = (val.toString() == '1');
-        });
+        bool isOn = (event.snapshot.value.toString() == '1');
+        setState(() => isRelay2On = isOn);
+        if (isOn && (_isTimingRestricted || widget.isRestricted))
+          _toggleRelay('relay2', false);
+      }
+    });
+
+    _dbRef.child('control/relay3').onValue.listen((event) {
+      if (mounted) {
+        bool isOn = (event.snapshot.value.toString() == '1');
+        setState(() => isRelay3On = isOn);
+        if (isOn && (_isTimingRestricted || widget.isRestricted))
+          _toggleRelay('relay3', false);
+      }
+    });
+
+    _dbRef.child('control/relay4').onValue.listen((event) {
+      if (mounted) {
+        bool isOn = (event.snapshot.value.toString() == '1');
+        setState(() => isRelay4On = isOn);
+        if (isOn && (_isTimingRestricted || widget.isRestricted))
+          _toggleRelay('relay4', false);
       }
     });
   }
 
-  void _toggleLight(bool value) {
-    _dbRef.child('control/bulb').set(value ? 1 : 0).catchError((error) {
+  void _fetchRoleAndTiming() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final snapshot = await _dbRef.child('users/${user.uid}').get();
+      if (snapshot.exists) {
+        final data = snapshot.value as Map<dynamic, dynamic>?;
+        if (data != null && mounted) {
+          setState(() {
+            _role = data['role']?.toString() ?? "Student";
+            _userName = data['name']?.toString() ?? "Unknown";
+          });
+        }
+      }
+    }
+
+    _dbRef.child('settings/LAB_timing').onValue.listen((event) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Failed to switch light: $error")),
-        );
+        final data = event.snapshot.value as Map<dynamic, dynamic>?;
+        if (data == null) return;
+
+        _isLabOpen = data['isOpen'] ?? true;
+        _startH = data['startHour'] ?? 9;
+        _startM = data['startMinute'] ?? 0;
+        _endH = data['endHour'] ?? 15;
+        _endM = data['endMinute'] ?? 0;
+
+        _checkTime();
       }
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF0F2F5),
-      body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 500),
-        switchInCurve: Curves.easeInOut,
-        switchOutCurve: Curves.easeInOut,
-        child: isConnected ? _buildDashboard() : _buildConnectScreen(),
-      ),
-    );
+  void _checkTime() {
+    if (!mounted) return;
+
+    void applyRestriction(String message) {
+      if (!_isTimingRestricted) {
+        if (isRelay1On) _toggleRelay('relay1', false);
+        if (isRelay2On) _toggleRelay('relay2', false);
+        if (isRelay3On) _toggleRelay('relay3', false);
+        if (isRelay4On) _toggleRelay('relay4', false);
+      }
+      setState(() {
+        _isTimingRestricted = true;
+        _restrictionMessage = message;
+      });
+    }
+
+    if (!_isLabOpen) {
+      applyRestriction(
+        _role == 'Teacher'
+            ? "You turned off access for today."
+            : "The teacher turned off access for today.",
+      );
+      return;
+    }
+
+    final now = DateTime.now();
+    int currentMinutes = now.hour * 60 + now.minute;
+    int startMinutes = _startH * 60 + _startM;
+    int endMinutes = _endH * 60 + _endM;
+
+    bool isRestrictedNow = false;
+
+    if (startMinutes < endMinutes) {
+      // Daytime shift: 9 AM to 3 PM
+      isRestrictedNow =
+          currentMinutes < startMinutes || currentMinutes >= endMinutes;
+    } else if (startMinutes > endMinutes) {
+      // Overnight shift: 9 PM to 3 AM
+      isRestrictedNow =
+          currentMinutes < startMinutes && currentMinutes >= endMinutes;
+    } else {
+      // 24 hours locked or open
+      isRestrictedNow = false;
+    }
+
+    if (isRestrictedNow) {
+      String formatTime(int h, int m) {
+        final hour = h == 0 ? 12 : (h > 12 ? h - 12 : h);
+        final minute = m.toString().padLeft(2, '0');
+        final period = h >= 12 ? 'PM' : 'AM';
+        return "$hour:$minute $period";
+      }
+
+      String sTime = formatTime(_startH, _startM);
+      String eTime = formatTime(_endH, _endM);
+
+      applyRestriction(
+        _role == 'Teacher'
+            ? "You set working hours from $sTime to $eTime. Please access in working hours."
+            : "Come back in working hours to access the lab.",
+      );
+    } else {
+      setState(() {
+        _isTimingRestricted = false;
+      });
+    }
   }
 
-  Widget _buildConnectScreen() {
-    return Center(
-      key: const ValueKey('ConnectScreen'),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text(
-            "SMART LAB",
-            style: TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 2.0,
-              color: Color(0xFF374151),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            "Establish secure connection to ESP32",
-            style: TextStyle(color: Colors.grey[500], fontSize: 14),
-          ),
-          const SizedBox(height: 60),
+  void _toggleRelay(String node, bool state) {
+    _dbRef.child('control/$node').set(state ? 1 : 0);
 
-          GestureDetector(
-            onTap: isConnecting ? null : _handleConnect,
-            child: AnimatedBuilder(
-              animation: _pulseAnimation,
-              builder: (context, child) {
-                return Transform.scale(
-                  scale: isConnecting ? _pulseAnimation.value : 1.0,
-                  child: Container(
-                    width: 180,
-                    height: 180,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: isConnecting
-                            ? [const Color(0xFF4FC3F7), const Color(0xFF29B6F6)]
-                            : [const Color(0x0fffffff), const Color(0xFFF5F5F5)],
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: isConnecting
-                              ? Colors.blue.withOpacity(0.3)
-                              : Colors.grey.withOpacity(0.2),
-                          blurRadius: 30,
-                          spreadRadius: 10,
-                          offset: const Offset(0, 10),
-                        ),
-                        BoxShadow(
-                          color: Colors.white,
-                          blurRadius: 10,
-                          offset: const Offset(-5, -5),
-                        ),
-                        BoxShadow(
-                          color: Colors.grey.withOpacity(0.2),
-                          blurRadius: 10,
-                          offset: const Offset(5, 5),
-                        ),
-                      ],
-                    ),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Icon(
-                          Icons.power_settings_new_rounded,
-                          size: 60,
-                          color: isConnecting ? Colors.white : Colors.grey[400],
-                        ),
-                        if (isConnecting)
-                          const SizedBox(
-                            width: 170,
-                            height: 170,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          const SizedBox(height: 50),
-
-          Text(
-            statusMessage.toUpperCase(),
-            key: const ValueKey('StatusMsg'),
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1.5,
-              color: isConnecting ? Colors.blue : Colors.grey[400],
-            ),
-          ),
-        ],
-      ),
-    );
+    // Log usage
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      _dbRef.child('usage/$node').set({
+        'uid': user.uid,
+        'userName': _userName,
+        'userRole': _role,
+        'state': state ? 1 : 0,
+        'timestamp': ServerValue.timestamp,
+      });
+    }
   }
 
-  Widget _buildDashboard() {
-    return SafeArea(
-      key: const ValueKey('Dashboard'),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+  void _onBottomNavTapped(int index) {
+    setState(() {
+      _currentIndex = index;
+    });
+  }
+
+  void _showRestrictedSnackBar() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: const Color(0xFF1E293B),
+        margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        content: Row(
           children: [
-            _buildHeader(),
-            const SizedBox(height: 30),
-            FadeSlideTransition(delay: 100, child: _buildStatusCard()),
-            const SizedBox(height: 30),
-            FadeSlideTransition(
-              delay: 200,
+            const Icon(Icons.lock_clock, color: Colors.white, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
               child: Text(
-                "CONTROLS",
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey[400],
-                  letterSpacing: 2,
-                ),
+                _restrictionMessage,
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
-            const SizedBox(height: 20),
-            _buildGrid(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  @override
+  Widget build(BuildContext context) {
+    final bool isRestricted = widget.isRestricted || _isTimingRestricted;
+
+    final List<Widget> teacherTabs = [
+      _buildHomeContent(isRestricted),
+      SensorsPage(isRestricted: isRestricted),
+      const UsersUsageScreen(),
+      TimingScreen(role: _role),
+      const ProfileScreen(),
+    ];
+
+    final List<Widget> studentTabs = [
+      _buildHomeContent(isRestricted),
+      SensorsPage(isRestricted: isRestricted),
+      TimingScreen(role: _role),
+      const ProfileScreen(),
+    ];
+
+    final tabs = _role == 'Teacher' ? teacherTabs : studentTabs;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4F6FB),
+      body: IndexedStack(index: _currentIndex, children: tabs),
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed,
+        currentIndex: _currentIndex,
+        onTap: _onBottomNavTapped,
+        selectedItemColor: const Color(0xFF5A55FF),
+        unselectedItemColor: const Color(0xFF94A3B8),
+        showUnselectedLabels: true,
+        items: _role == 'Teacher'
+            ? [
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.home_filled),
+                  label: "Home",
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.bar_chart),
+                  label: "Sensors",
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.group),
+                  label: "Users",
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.access_time_rounded),
+                  label: "Timing",
+                ),
+                BottomNavigationBarItem(
+                  icon: FirebaseAuth.instance.currentUser?.photoURL != null
+                      ? CircleAvatar(
+                          radius: 12,
+                          backgroundImage: NetworkImage(
+                            FirebaseAuth.instance.currentUser!.photoURL!,
+                          ),
+                        )
+                      : const Icon(Icons.person_outline),
+                  label: "Profile",
+                ),
+              ]
+            : [
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.home_filled),
+                  label: "Home",
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.bar_chart),
+                  label: "Sensors",
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.access_time_rounded),
+                  label: "Timing",
+                ),
+                BottomNavigationBarItem(
+                  icon: FirebaseAuth.instance.currentUser?.photoURL != null
+                      ? CircleAvatar(
+                          radius: 12,
+                          backgroundImage: NetworkImage(
+                            FirebaseAuth.instance.currentUser!.photoURL!,
+                          ),
+                        )
+                      : const Icon(Icons.person_outline),
+                  label: "Profile",
+                ),
+              ],
+      ),
+    );
+  }
+
+  Widget _buildHomeContent(bool isRestricted) {
+    final Color statusColor = isRestricted
+        ? const Color(0xFFCBD5E1)
+        : Colors.greenAccent;
+    final Color headerTextColor = isRestricted
+        ? const Color(0xFFCBD5E1)
+        : Colors.white;
+
+    return Stack(
       children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+        Container(
+          height: 280,
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xFF4A44FF), Color(0xFF7C53FF)],
+            ),
+          ),
+        ),
+        SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(
-                    color: Colors.green,
-                    shape: BoxShape.circle,
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 20,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Text(
+                      //   "Good Morning 👋",
+                      //   style: TextStyle(
+                      //     color: headerTextColor,
+                      //     fontSize: 16,
+                      //     fontWeight: FontWeight.w600,
+                      //   ),
+                      // ),
+                      const SizedBox(height: 5),
+                      Text(
+                        "LAB Dashboard",
+                        style: TextStyle(
+                          color: headerTextColor,
+                          fontSize: 32,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -1,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Row(
+                        children: [
+                          _buildHeaderChip(
+                            Icons.circle,
+                            isRestricted ? "LAB Offline" : "LAB Active",
+                            statusColor,
+                          ),
+                          const SizedBox(width: 12),
+                          _buildHeaderChip(
+                            Icons.memory,
+                            "3 Devices",
+                            headerTextColor,
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  "Connected",
-                  style: TextStyle(
-                    color: Colors.green[700],
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: GridView.count(
+                    crossAxisCount: 2,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                    childAspectRatio: 1.25,
+                    children: [
+                      _buildStatCard(
+                        Icons.monitor,
+                        const Color(0xFFE8EAF6),
+                        const Color(0xFF5C6BC0),
+                        humidityValue,
+                        "Humidity (%)",
+                      ),
+                      _buildStatCard(
+                        Icons.show_chart,
+                        const Color(0xFFE8F5E9),
+                        const Color(0xFF66BB6A),
+                        "$tempValue°C",
+                        "Avg Temp",
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 15),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 24),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        "Devices",
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1E293B),
+                        ),
+                      ),
+                      Text(
+                        "View all",
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF6B7BFF),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 15),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: GridView.count(
+                    crossAxisCount: 2,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                    childAspectRatio: 0.85,
+                    children: [
+                      HangingLightCard(
+                        title: "Relay-1",
+                        isOn: isRelay1On,
+                        onChanged: (v) => _toggleRelay('relay1', v),
+                        isRestricted: isRestricted,
+                        onRestricted: _showRestrictedSnackBar,
+                      ),
+                      AnimatedPlugCard(
+                        title: "Relay-2",
+                        isOn: isRelay2On,
+                        onChanged: (v) => _toggleRelay('relay2', v),
+                        isRestricted: isRestricted,
+                        onRestricted: _showRestrictedSnackBar,
+                      ),
+                      AnimatedPlugCard(
+                        title: "Relay-3",
+                        isOn: isRelay3On,
+                        onChanged: (v) => _toggleRelay('relay3', v),
+                        isRestricted: isRestricted,
+                        onRestricted: _showRestrictedSnackBar,
+                      ),
+                      // Container(
+                      //   decoration: BoxDecoration(
+                      //     color: isRestricted
+                      //         ? const Color(0xFFF1F5F9)
+                      //         : const Color(0xFF1E293B).withValues(alpha: 0.3),
+                      //     borderRadius: BorderRadius.circular(24),
+                      //     border: Border.all(
+                      //       color: isRestricted
+                      //           ? const Color(0xFFE2E8F0)
+                      //           : Colors.grey.shade800,
+                      //       width: 2,
+                      //     ),
+                      //   ),
+                      //   // child: Center(
+                      //   //   child: Column(
+                      //   //     mainAxisAlignment: MainAxisAlignment.center,
+                      //   //     children: [
+                      //   //       Icon(
+                      //   //         Icons.add_circle_outline,
+                      //   //         color: Colors.grey.shade600,
+                      //   //         size: 28,
+                      //   //       ),
+                      //   //       const SizedBox(height: 8),
+                      //   //       Text(
+                      //   //         "Empty Slot",
+                      //   //         style: TextStyle(
+                      //   //           color: Colors.grey.shade600,
+                      //   //           fontSize: 12,
+                      //   //           fontWeight: FontWeight.w600,
+                      //   //         ),
+                      //   //       ),
+                      //   //     ],
+                      //   //   ),
+                      //   // ),
+                      // ),
+                    ],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 5),
-            const Text(
-              "My Dashboard",
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF1E293B),
-                letterSpacing: -1,
-              ),
-            ),
-          ],
-        ),
-        IconButton(
-          onPressed: () {
-            setState(() {
-              isConnected = false;
-              statusMessage = "Tap to Connect";
-            });
-          },
-          icon: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey[200]!),
-            ),
-            child: const Icon(Icons.power_settings_new, color: Colors.red),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildStatusCard() {
+  Widget _buildHeaderChip(IconData icon, String label, Color iconColor) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.05),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
+        color: Colors.white.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _buildSensorItem("Temp", tempValue, Icons.thermostat, Colors.orange),
-          Container(width: 1, height: 40, color: Colors.grey[100]),
-          _buildSensorItem(
-            "Humidity",
-            humidityValue,
-            Icons.water_drop,
-            Colors.blue,
-          ),
-          Container(width: 1, height: 40, color: Colors.grey[100]),
-          _buildSensorItem(
-            "Security",
-            motionStatus,
-            Icons.shield,
-            motionStatus == "Motion Detected" ? Colors.red : Colors.green,
+          Icon(icon, color: iconColor, size: 14),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildSensorItem(
-    String label,
+  Widget _buildStatCard(
+    IconData icon,
+    Color iconBg,
+    Color iconColor,
     String value,
-    IconData icon,
-    Color color,
+    String subtitle,
   ) {
-    return Column(
-      children: [
-        Icon(icon, color: color, size: 24),
-        const SizedBox(height: 8),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF1E293B),
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.02),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
           ),
-        ),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[400],
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildGrid() {
-    return GridView.count(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: 2,
-      crossAxisSpacing: 20,
-      mainAxisSpacing: 20,
-      childAspectRatio: 0.85,
-      children: [
-        _buildControlCard(
-          "Lab Light",
-          Icons.lightbulb,
-          isLightOn,
-          (v) => _toggleLight(v),
-          Colors.amber,
-          0,
-        ),
-        _buildControlCard(
-          "Laptop",
-          Icons.laptop_mac,
-          false,
-          (v) {},
-          Colors.blue,
-          100,
-        ),
-        _buildControlCard(
-          "Fan",
-          Icons.wind_power,
-          false,
-          (v) {},
-          Colors.cyan,
-          200,
-        ),
-        _buildControlCard(
-          "Projector",
-          Icons.videocam,
-          false,
-          (v) {},
-          Colors.purple,
-          300,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildControlCard(
-    String title,
-    IconData icon,
-    bool isActive,
-    Function(bool) onChanged,
-    Color activeColor,
-    int delay,
-  ) {
-    return FadeSlideTransition(
-      delay: delay,
-      child: GestureDetector(
-        onTap: () => onChanged(!isActive),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: isActive ? activeColor : Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: isActive
-                    ? activeColor.withOpacity(0.4)
-                    : Colors.grey.withOpacity(0.05),
-                blurRadius: isActive ? 20 : 10,
-                offset: const Offset(0, 10),
-              ),
-            ],
-            border: isActive
-                ? Border.all(color: Colors.transparent)
-                : Border.all(color: Colors.grey[100]!, width: 2),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: isActive
-                          ? Colors.white.withOpacity(0.2)
-                          : Colors.grey[50],
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      icon,
-                      color: isActive ? Colors.white : Colors.grey[400],
-                      size: 22,
-                    ),
-                  ),
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: isActive ? Colors.white : Colors.transparent,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: isActive ? Colors.white : Colors.grey[300]!,
-                        width: 2,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isActive ? "ON" : "OFF",
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: isActive ? Colors.white70 : Colors.grey[400],
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: isActive ? Colors.white : const Color(0xFF1E293B),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
+        ],
       ),
-    );
-  }
-}
-
-class FadeSlideTransition extends StatefulWidget {
-  final Widget child;
-  final int delay;
-
-  const FadeSlideTransition({
-    super.key,
-    required this.child,
-    required this.delay,
-  });
-
-  @override
-  State<FadeSlideTransition> createState() => _FadeSlideTransitionState();
-}
-
-class _FadeSlideTransitionState extends State<FadeSlideTransition>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<Offset> _offsetAnimation;
-  late Animation<double> _opacityAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 800),
-      vsync: this,
-    );
-
-    _offsetAnimation = Tween<Offset>(
-      begin: const Offset(0, 0.1),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
-
-    _opacityAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
-
-    Future.delayed(Duration(milliseconds: widget.delay), () {
-      if (mounted) _controller.forward();
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _opacityAnimation,
-      child: SlideTransition(position: _offsetAnimation, child: widget.child),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: iconBg,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: iconColor, size: 24),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF1E293B),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF94A3B8),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

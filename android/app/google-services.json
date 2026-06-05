@@ -13,7 +13,20 @@
           "package_name": "com.smartlab.appxplora"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "135446987002-br83t3fgjsd86h64oq7a8bv7age1v6g5.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.smartlab.appxplora",
+            "certificate_hash": "ed6963d9ffc10621a72abd7b87ea7fdfc9cc490a"
+          }
+        },
+        {
+          "client_id": "135446987002-9ssgrhbegvfbjue7el1vh4osmc47eoug.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyANLGB0zekmjlkwblUD_6eh09gebh1oLq4"
@@ -21,7 +34,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "135446987002-9ssgrhbegvfbjue7el1vh4osmc47eoug.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
